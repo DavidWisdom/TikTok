@@ -1,8 +1,9 @@
 package controller
 
 import (
-	"github.com/gin-gonic/gin"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
 
 type UserListResponse struct {
@@ -21,8 +22,6 @@ func RelationAction(c *gin.Context) {
 	}
 }
 
-
-
 // FollowList all users have same follow list
 // 我的关注
 func FollowList(c *gin.Context) {
@@ -32,7 +31,7 @@ func FollowList(c *gin.Context) {
 		},
 		UserList: []User{DemoUser},
 	})
-  
+
 }
 
 // FollowerList all users have same follower list

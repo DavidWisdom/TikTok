@@ -23,11 +23,13 @@ type Comment struct {
 }
 
 type User struct {
-	Id            int64  `json:"id,omitempty"`
-	Name          string `json:"name,omitempty"`
-	FollowCount   int64  `json:"follow_count,omitempty"`
-	FollowerCount int64  `json:"follower_count,omitempty"`
-	IsFollow      bool   `json:"is_follow,omitempty"`
+	// omitempty：如果没有赋值，就忽略
+	Id            int64  `json:"id,omitempty" gorm:"column:user_id"`
+	Name          string `json:"name,omitempty" gorm:"column:username"`
+	PassWord      string `json:"password,omitempty" gorm:"column:password"`
+	FollowCount   int64  `json:"follow_count,omitempty" gorm:"column:follow_count"`
+	FollowerCount int64  `json:"follower_count,omitempty" gorm:"column:fans_count"`
+	IsFollow      bool   `json:"is_follow,omitempty" `
 }
 
 type Message struct {
@@ -45,4 +47,10 @@ type MessageSendEvent struct {
 type MessagePushEvent struct {
 	FromUserId int64  `json:"user_id,omitempty"`
 	MsgContent string `json:"msg_content,omitempty"`
+}
+
+type Follow struct {
+	Attention int64 `json:"attention,omitempty"`
+	Fans      int64 `json:"fans,omitempty"`
+	Mutual    bool  `json:"is_follow,omitempty"`
 }

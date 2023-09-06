@@ -1,12 +1,9 @@
 package controller
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"net/http"
+	"strconv"
 )
 
 type UserListResponse struct {
@@ -16,241 +13,467 @@ type UserListResponse struct {
 
 // RelationAction no practical effect, just check if token is valid
 func RelationAction(c *gin.Context) {
+	db, err := Connect()
+	if err != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "数据库连接异常",
+		})
+		return
+	}	
 	token := c.Query("token")
-
-	if _, exist := usersLoginInfo[token]; exist {
-		c.JSON(http.StatusOK, Response{StatusCode: 0})
-	} else {
-		c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "User doesn't exist"})
+	username, password, err := GetInfo(token)
+	if err != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1, 
+				StatusMsg: "用户鉴权出错",
+		})
+		return
 	}
+	var user DBUser
+	querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
+	if querySql.Error != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "服务器异常错误",
+		})
+		return
+	}
+	if querySql.RowsAffected == 0 {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "用户鉴权出错",
+		})
+		return
+	}
+	to_user := c.Query("to_user_id")
+	to_user_id, err := strconv.ParseInt(to_user, 10, 64)
+	var newUser DBUser
+	querySql = db.Table("User").Where("user_id", to_user_id).First(&newUser)
+	if querySql.Error != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "服务器异常错误",
+		})
+		return
+	}
+	if querySql.RowsAffected == 0 {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "用户不存在",
+		})
+		return
+	}
+	if user.Id == to_user_id {
+		c.JSON(http.StatusOK, UserLoginResponse{
+			Response: Response{StatusCode: 1, StatusMsg: "不能关注自己"},
+		})
+		return
+	}
+	actionType := c.Query("action_type")
+	if actionType == "1" {
+		  tx := db.Begin()
+			var follow Follow
+			result := tx.Table("Follow").Where("from_user_id = ? AND to_user_id = ?", to_user_id, user.Id).Limit(1).Scan(&follow)
+			if result.Error != nil {
+					tx.Rollback() // 回滚事务
+					c.JSON(http.StatusOK, UserLoginResponse{
+						Response: Response{StatusCode: 1, StatusMsg: result.Error.Error()},
+					})
+					return
+			}		
+			state := false 
+			if result.RowsAffected > 0 {
+					state = true
+					sql := `UPDATE Follow SET is_mutual = TRUE WHERE from_user_id = ? AND to_user_id = ?`
+					result = tx.Exec(sql, to_user_id, user.Id)
+					if result.Error != nil {
+						tx.Rollback() // 回滚事务
+						c.JSON(http.StatusOK, UserLoginResponse{
+							Response: Response{StatusCode: 1, StatusMsg: "服务器异常错误"},
+						})
+						return
+					}		
+			}
+			sql := `
+				INSERT INTO Follow (from_user_id, to_user_id, is_mutual)
+				VALUES (?, ?, ?)
+			`
+			// 执行插入操作
+			result = tx.Exec(sql, user.Id, to_user_id, state)
+			if result.Error != nil {
+					tx.Rollback() // 回滚事务
+					c.JSON(http.StatusOK, UserLoginResponse{
+						Response: Response{StatusCode: 1, StatusMsg: "服务器异常错误"},
+					})
+				return
+			}
+			sql = `
+				UPDATE User SET follow_count = follow_count + 1 WHERE user_id = ?
+			`
+			if err := tx.Exec(sql, user.Id).Error; err != nil {
+			    tx.Rollback() // 回滚事务
+					c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "服务器异常错误"})
+				  return
+			}
+			sql = `
+				UPDATE User Set follower_count = follower_count + 1 WHERE user_id = ?
+			`
+			if err := tx.Exec(sql, to_user_id).Error; err != nil {
+			    tx.Rollback() // 回滚事务
+					c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "服务器异常错误"})
+				  return
+			}
+			if err := tx.Commit().Error; err != nil {
+					c.JSON(http.StatusOK, UserLoginResponse{
+						Response: Response{StatusCode: 1, StatusMsg: "Error"},
+					})
+					return
+			}
+	} else {
+		  tx := db.Begin()
+			sql := `DELETE FROM Follow WHERE from_user_id = ? AND to_user_id = ?`
+			result := tx.Exec(sql, user.Id, to_user_id)
+			if result.Error != nil {
+					tx.Rollback() // 回滚事务
+					c.JSON(http.StatusOK, UserLoginResponse{
+						Response: Response{StatusCode: 1, StatusMsg: "服务器异常错误"},
+					})
+					return
+			}		
+			sql = `
+				UPDATE Follow SET is_mutual = FALSE WHERE from_user_id = ? AND to_user_id = ?
+			`
+			// 执行插入操作
+			result = tx.Exec(sql, to_user_id, user.Id)
+			if result.Error != nil {
+					tx.Rollback() // 回滚事务
+					c.JSON(http.StatusOK, UserLoginResponse{
+						Response: Response{StatusCode: 1, StatusMsg: "服务器异常错误"},
+					})
+				return
+			}
+			sql = `
+				UPDATE User SET follow_count = follow_count - 1 WHERE user_id = ?
+			`
+			if err := tx.Exec(sql, user.Id).Error; err != nil {
+			    tx.Rollback() // 回滚事务
+					c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "服务器异常错误"})
+				  return
+			}
+			sql = `
+				UPDATE User Set follower_count = follower_count - 1 WHERE user_id = ?
+			`
+			if err := tx.Exec(sql, to_user_id).Error; err != nil {
+			    tx.Rollback() // 回滚事务
+					c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "服务器异常错误"})
+				  return
+			}
+			if err := tx.Commit().Error; err != nil {
+					c.JSON(http.StatusOK, UserLoginResponse{
+						Response: Response{StatusCode: 1, StatusMsg: "Error"},
+					})
+					return
+			}
+	}
+	c.JSON(http.StatusOK, Response{
+			StatusCode: 0,
+	})
 }
 
-// / FollowList all users have same follow list
-// 我的关注
-func FollowList(c *gin.Context) {
-	db, err := gorm.Open(mysql.New(mysql.Config{
-		DSN:                       "root:zjh97867860@tcp(127.0.0.1:13306)/tiktok?charset=utf8&parseTime=True&loc=Local",
-		DisableDatetimePrecision:  true, // 禁用 datetime 精度，MySQL 5.6 之前的数据库不支持
-		DontSupportRenameIndex:    true, // 重命名索引时采用删除并新建的方式，MySQL 5.7 之前的数据库和 MariaDB 不支持重命名索引
-		DontSupportRenameColumn:   true, // 用 `change` 重命名列，MySQL 8 之前的数据库和 MariaDB 不支持重命名列
-		SkipInitializeWithVersion: false,
-	}), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info), // Info level log
-	})
+// FollowList all users have same follow list
+func FollowerList(c *gin.Context) {
+	db, err := Connect()
 	if err != nil {
-		// 引发异常
-		c.JSON(http.StatusOK, UserListResponse{
-			Response: Response{
-				StatusCode: 1,
-				StatusMsg:  "数据库连接异常",
-			},
-		})
-	}
-
-	token := c.Query("token")
-
-	if _, exist := usersLoginInfo[token]; exist {
-		// 登录成功
 		c.JSON(http.StatusOK, Response{
-			StatusCode: 0,
+				StatusCode: 1,
+				StatusMsg: "数据库连接异常",
 		})
-	} else {
-		// 登录失败
-		c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "User doesn't exist"})
+		return
+	}	
+	token := c.Query("token")
+	username, password, err := GetInfo(token)
+	if err != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1, 
+				StatusMsg: "用户鉴权出错",
+		})
+		return
 	}
-
-	// 查询当前用户对应的关注
-	// 假设用户id为10(数据库模拟)
-	// 通过当前用户id去查询关系表内的fans，只要当前用户为fans，就能拿到它对应的关注
-	current_id := 10
+	var user DBUser
+	querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
+	if querySql.Error != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "服务器异常错误",
+		})
+		return
+	}
+	if querySql.RowsAffected == 0 {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "用户鉴权出错",
+		})
+		return
+	}
+	user_id := c.Query("user_id")
+	var id int64
+	id, err = strconv.ParseInt(user_id, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
+				StatusCode: 1, 
+				StatusMsg: "非法用户标识符",
+		}})
+		return
+	}
 	var follows []Follow
-
-	if err := db.Where("fans = ?", current_id).Find(&follows).Error; err != nil {
+	if err := db.Table("Follow").Where("to_user_id = ?", id).Find(&follows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, UserListResponse{
 			Response: Response{
 				StatusCode: 1,
-				StatusMsg:  "数据库查询出错",
+				StatusMsg: "服务器异常错误",
 			},
 		})
+		return
 	}
 	var FansNumber []int64
-
 	for _, follow := range follows {
-		FansNumber = append(FansNumber, follow.Attention)
+		FansNumber = append(FansNumber, follow.FollowerId)
 	}
-
 	var users []User
-	// 模拟，查找所有
-
-	if err := db.Find(&users, FansNumber).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, UserListResponse{
-			Response: Response{
-				StatusCode: 1,
-				StatusMsg:  "数据库查询出错",
-			},
-		})
+	for _, usr_id := range FansNumber {
+			var usr DBUser
+	 		db.Table("User").Where("user_id = ?", usr_id).First(&usr)
+			queryIsFollow := db.Table("Follow").Where("from_user_id = ? AND to_user_id = ?", usr.Id, id).Select("1").Limit(1)
+			if queryIsFollow.Error != nil {
+				c.JSON(http.StatusOK, UserListResponse { Response: Response{
+						StatusCode: 1,
+						StatusMsg: "服务器异常错误",
+				}})
+				return
+			}
+			subscribe := false
+			if queryIsFollow.RowsAffected > 0 {
+				subscribe = true
+			}
+			newUser := User{
+				Id: usr.Id,
+				Name: usr.Name,
+				FollowCount: usr.FollowCount,
+				FollowerCount: usr.FollowerCount,
+				IsFollow: subscribe,
+				Avatar: usr.Avatar,
+				BackGroundImage: usr.BackGroundImage,
+				Signature: usr.Signature,
+				TotalFavorited: usr.TotalFavorited,
+				WorkCount: usr.WorkCount,
+				FavoriteCount: usr.FavoriteCount,
+			}
+			users = append(users, newUser)
 	}
-
-	// 查询得到数据
 	c.JSON(http.StatusOK, UserListResponse{
 		Response: Response{
 			StatusCode: 0,
-			StatusMsg:  "查询成功",
 		},
 		UserList: users,
 	})
 }
 
 // FollowerList all users have same follower list
-// 我的粉丝
-func FollowerList(c *gin.Context) {
-	db, err := gorm.Open(mysql.New(mysql.Config{
-		DSN:                       "root:zjh97867860@tcp(127.0.0.1:13306)/tiktok?charset=utf8&parseTime=True&loc=Local",
-		DisableDatetimePrecision:  true, // 禁用 datetime 精度，MySQL 5.6 之前的数据库不支持
-		DontSupportRenameIndex:    true, // 重命名索引时采用删除并新建的方式，MySQL 5.7 之前的数据库和 MariaDB 不支持重命名索引
-		DontSupportRenameColumn:   true, // 用 `change` 重命名列，MySQL 8 之前的数据库和 MariaDB 不支持重命名列
-		SkipInitializeWithVersion: false,
-	}), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info), // Info level log
-	})
+func FollowList(c *gin.Context) {
+	db, err := Connect()
 	if err != nil {
-		// 引发异常
-		c.JSON(http.StatusOK, UserListResponse{
-			Response: Response{
-				StatusCode: 1,
-				StatusMsg:  "数据库连接异常",
-			},
-		})
-	}
-
-	token := c.Query("token")
-
-	if _, exist := usersLoginInfo[token]; exist {
-		// 登录成功
 		c.JSON(http.StatusOK, Response{
-			StatusCode: 0,
+				StatusCode: 1,
+				StatusMsg: "数据库连接异常",
 		})
-	} else {
-		// 登录失败
-		c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "User doesn't exist"})
+		return
+	}	
+	token := c.Query("token")
+	username, password, err := GetInfo(token)
+	if err != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1, 
+				StatusMsg: "用户鉴权出错",
+		})
+		return
+	}
+	var user DBUser
+	querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
+	if querySql.Error != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "服务器异常错误",
+		})
+		return
+	}
+	if querySql.RowsAffected == 0 {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "用户鉴权出错",
+		})
+		return
+	}
+	user_id := c.Query("user_id")
+	var id int64
+	id, err = strconv.ParseInt(user_id, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
+				StatusCode: 1, 
+				StatusMsg: "非法用户标识符",
+		}})
+		return
 	}
 
-	// 查询当前用户对应的关注
-	// 查询当前用户对应的关注
-	// 假设用户id为10(数据库模拟)
-	// 通过当前用户id去查询关系表内的fans，只要当前用户为fans，就能拿到它对应的关注
-	current_id := 10
-	var follows []Follow
 
-	if err := db.Where("attention = ?", current_id).Find(&follows).Error; err != nil {
+	var follows []Follow
+	if err := db.Table("Follow").Where("from_user_id = ?", id).Find(&follows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, UserListResponse{
 			Response: Response{
 				StatusCode: 1,
-				StatusMsg:  "数据库查询出错",
+				StatusMsg: "服务器异常错误",
 			},
 		})
+		return
 	}
 	var FansNumber []int64
-
 	for _, follow := range follows {
-		FansNumber = append(FansNumber, follow.Fans)
+		FansNumber = append(FansNumber, follow.FollowId)
 	}
-
 	var users []User
-	// 模拟，查找所有
-	if err := db.Find(&users, FansNumber).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, UserListResponse{
-			Response: Response{
-				StatusCode: 1,
-				StatusMsg:  "数据库查询出错",
-			},
-		})
+	for _, usr_id := range FansNumber {
+			var usr DBUser
+	 		db.Table("User").Where("user_id = ?", usr_id).First(&usr)
+			queryIsFollow := db.Table("Follow").Where("from_user_id = ? AND to_user_id = ?", usr.Id, id).Select("1").Limit(1)
+			if queryIsFollow.Error != nil {
+				c.JSON(http.StatusOK, UserListResponse { Response: Response{
+						StatusCode: 1,
+						StatusMsg: "服务器异常错误",
+				}})
+				return
+			}
+			subscribe := false
+			if queryIsFollow.RowsAffected > 0 {
+				subscribe = true
+			}
+			newUser := User{
+				Id: usr.Id,
+				Name: usr.Name,
+				FollowCount: usr.FollowCount,
+				FollowerCount: usr.FollowerCount,
+				IsFollow: subscribe,
+				Avatar: usr.Avatar,
+				BackGroundImage: usr.BackGroundImage,
+				Signature: usr.Signature,
+				TotalFavorited: usr.TotalFavorited,
+				WorkCount: usr.WorkCount,
+				FavoriteCount: usr.FavoriteCount,
+			}
+			users = append(users, newUser)
 	}
-
-	// 查询得到数据
 	c.JSON(http.StatusOK, UserListResponse{
 		Response: Response{
 			StatusCode: 0,
-			StatusMsg:  "查询成功",
 		},
 		UserList: users,
 	})
 }
 
 // FriendList all users have same friend list
-// 互相关注
-// 思路：查询该用户外键对应的粉丝或关注是否存在关联字段
 func FriendList(c *gin.Context) {
-	db, err := gorm.Open(mysql.New(mysql.Config{
-		DSN:                       "root:zjh97867860@tcp(127.0.0.1:13306)/tiktok?charset=utf8&parseTime=True&loc=Local",
-		DisableDatetimePrecision:  true, // 禁用 datetime 精度，MySQL 5.6 之前的数据库不支持
-		DontSupportRenameIndex:    true, // 重命名索引时采用删除并新建的方式，MySQL 5.7 之前的数据库和 MariaDB 不支持重命名索引
-		DontSupportRenameColumn:   true, // 用 `change` 重命名列，MySQL 8 之前的数据库和 MariaDB 不支持重命名列
-		SkipInitializeWithVersion: false,
-	}), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info), // Info level log
-	})
+	db, err := Connect()
 	if err != nil {
-		// 引发异常
-		c.JSON(http.StatusOK, UserListResponse{
-			Response: Response{
-				StatusCode: 1,
-				StatusMsg:  "数据库连接异常",
-			},
-		})
-	}
-
-	token := c.Query("token")
-
-	if _, exist := usersLoginInfo[token]; exist {
-		// 登录成功
 		c.JSON(http.StatusOK, Response{
-			StatusCode: 0,
+				StatusCode: 1,
+				StatusMsg: "数据库连接异常",
 		})
-	} else {
-		// 登录失败
-		c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "User doesn't exist"})
+		return
+	}	
+	token := c.Query("token")
+	username, password, err := GetInfo(token)
+	if err != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1, 
+				StatusMsg: "用户鉴权出错",
+		})
+		return
+	}
+	var user DBUser
+	querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
+	if querySql.Error != nil {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "服务器异常错误",
+		})
+		return
+	}
+	if querySql.RowsAffected == 0 {
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "用户鉴权出错",
+		})
+		return
+	}
+	user_id := c.Query("user_id")
+	var id int64
+	id, err = strconv.ParseInt(user_id, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
+				StatusCode: 1, 
+				StatusMsg: "非法用户标识符",
+		}})
+		return
 	}
 
-	// 查询当前用户对应互相关注
-	var current_id int64
-	current_id = 10
-	var follows []Follow
 
-	if err := db.Where("(fans = ? OR attention = ?) AND mutual = ?", current_id, current_id, 1).Find(&follows).Error; err != nil {
+	var follows []Follow
+	if err := db.Table("Follow").Where("from_user_id = ? AND is_mutual = TRUE", id).Find(&follows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, UserListResponse{
 			Response: Response{
 				StatusCode: 1,
-				StatusMsg:  "数据库查询出错",
+				StatusMsg: "服务器异常错误",
 			},
 		})
+		return
 	}
 	var FansNumber []int64
-
 	for _, follow := range follows {
-		if follow.Attention == current_id {
-			FansNumber = append(FansNumber, follow.Fans)
-		} else {
-			FansNumber = append(FansNumber, follow.Attention)
-		}
+		FansNumber = append(FansNumber, follow.FollowId)
 	}
-
 	var users []User
-	// 模拟，查找所有
-	if err := db.Find(&users, FansNumber).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, UserListResponse{
-			Response: Response{
-				StatusCode: 1,
-				StatusMsg:  "数据库查询出错",
-			},
-		})
+	for _, usr_id := range FansNumber {
+			var usr DBUser
+	 		db.Table("User").Where("user_id = ?", usr_id).First(&usr)
+			queryIsFollow := db.Table("Follow").Where("from_user_id = ? AND to_user_id = ?", usr.Id, id).Select("1").Limit(1)
+			if queryIsFollow.Error != nil {
+				c.JSON(http.StatusOK, UserListResponse { Response: Response{
+						StatusCode: 1,
+						StatusMsg: "服务器异常错误",
+				}})
+				return
+			}
+			subscribe := false
+			if queryIsFollow.RowsAffected > 0 {
+				subscribe = true
+			}
+			newUser := User{
+				Id: usr.Id,
+				Name: usr.Name,
+				FollowCount: usr.FollowCount,
+				FollowerCount: usr.FollowerCount,
+				IsFollow: subscribe,
+				Avatar: usr.Avatar,
+				BackGroundImage: usr.BackGroundImage,
+				Signature: usr.Signature,
+				TotalFavorited: usr.TotalFavorited,
+				WorkCount: usr.WorkCount,
+				FavoriteCount: usr.FavoriteCount,
+			}
+			users = append(users, newUser)
 	}
-
-	// 查询得到数据
 	c.JSON(http.StatusOK, UserListResponse{
 		Response: Response{
 			StatusCode: 0,
-			StatusMsg:  "查询成功",
 		},
 		UserList: users,
 	})

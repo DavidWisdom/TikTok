@@ -1,9 +1,0 @@
-run_command: go build && ./simple-demo
-debug:
-  support: true
-  launch:
-    request: launch
-    mode: debug
-    program: .
-    console: integratedTerminal
-    cwd: .

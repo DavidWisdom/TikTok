@@ -35,9 +35,11 @@ func Publish(c *gin.Context) {
 		})
 		return
 	}
+	tx := db.Begin()
 	var user DBUser
-	querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
+	querySql := tx.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
 	if querySql.Error != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, Response{
 				StatusCode: 1,
 				StatusMsg: "服务器异常错误",
@@ -45,6 +47,7 @@ func Publish(c *gin.Context) {
 		return
 	}
 	if querySql.RowsAffected == 0 {
+		tx.Rollback()
 		c.JSON(http.StatusOK, Response{
 				StatusCode: 1,
 				StatusMsg: "用户鉴权出错",
@@ -53,6 +56,7 @@ func Publish(c *gin.Context) {
 	}
 	data, err := c.FormFile("data")
 	if err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, Response{
 			StatusCode: 1,
 			StatusMsg: "上传文件读取错误",
@@ -65,6 +69,7 @@ func Publish(c *gin.Context) {
 	finalName := fmt.Sprintf("%d_%d_%s", user.Id, timestamp, filename)
 	dir, err := os.Getwd()
 	if err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, Response{
 			StatusCode: 1,
 			StatusMsg: "上传文件失败",
@@ -73,6 +78,7 @@ func Publish(c *gin.Context) {
 	}
 	saveFile := filepath.Join(dir, "/public/", finalName)
 	if err := c.SaveUploadedFile(data, saveFile); err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, Response{
 			StatusCode: 1,
 			StatusMsg: "上传文件失败",
@@ -83,6 +89,7 @@ func Publish(c *gin.Context) {
 	 saveImage := strings.TrimSuffix(saveFile, ext)
 	 _, err = GetSnapshot(saveFile, saveImage, 1)
 	 if err != nil {
+		 	tx.Rollback()
 			c.JSON(http.StatusOK, Response{
 				StatusCode: 1,
 				StatusMsg: "无法获取视频图像",
@@ -94,7 +101,6 @@ func Publish(c *gin.Context) {
   title := c.PostForm("title")
   coverImage := "https://" + url + "/static/" + imageUrl + ".png"
 	saveFile = "https://" + url + "/static/" + imageUrl + ".mp4"
-	tx := db.Begin()
 	sql := `
  		INSERT INTO Video (user_id, play_url, cover_url, title)
 		VALUES (?, ?, ?, ?)
@@ -119,6 +125,7 @@ func Publish(c *gin.Context) {
 			return
 	}
 	if err := tx.Commit().Error; err != nil {
+			tx.Rollback() // 回滚事务
 			c.JSON(http.StatusOK, Response{
 					StatusCode: 1,
 					StatusMsg: "服务器异常错误",
@@ -141,6 +148,7 @@ func PublishList(c *gin.Context) {
 		}})
 		return
 	}	
+	tx := db.Begin()
 	token := c.Query("token")
 	var id int64
 	username, password, err := GetInfo(token)
@@ -152,8 +160,9 @@ func PublishList(c *gin.Context) {
 		return
 	}
 	var me DBUser
-	querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&me)
+	querySql := tx.Table("User").Where("username = ? AND password = ?", username, password).First(&me)
 	if querySql.Error != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 				StatusCode: 1,
 				StatusMsg: "服务器异常错误",
@@ -161,6 +170,7 @@ func PublishList(c *gin.Context) {
 		return
 	}
 	if querySql.RowsAffected == 0 {
+		tx.Rollback()
 		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 				StatusCode: 1,
 				StatusMsg: "用户鉴权出错",
@@ -170,6 +180,7 @@ func PublishList(c *gin.Context) {
 	user_id := c.Query("user_id")
 	id, err = strconv.ParseInt(user_id, 10, 64)
 	if err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 				StatusCode: 1, 
 				StatusMsg: "非法用户标识符",
@@ -177,8 +188,9 @@ func PublishList(c *gin.Context) {
 		return
 	}
 	var tempVideos []DBVideo
-	err = db.Table("Video").Where("user_id = ?", id).Order("created_time DESC").Find(&tempVideos).Error
+	err = tx.Table("Video").Where("user_id = ?", id).Order("created_time DESC").Find(&tempVideos).Error
 	if err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 			StatusCode: 1,
 			StatusMsg:  "查询视频信息错误",
@@ -189,9 +201,10 @@ func PublishList(c *gin.Context) {
 	for _, tempVideo := range tempVideos {
     AuthorId := tempVideo.AuthorId
 		var user DBUser
-	  db.Table("User").Where("user_id = ?", AuthorId).First(&user)
-		queryIsFollow := db.Table("Follow").Where("from_user_id = ? AND to_user_id = ?", user.Id, id)
+	  tx.Table("User").Where("user_id = ?", AuthorId).First(&user)
+		queryIsFollow := tx.Table("Follow").Where("from_user_id = ? AND to_user_id = ?", user.Id, id)
 		if queryIsFollow.Error != nil {
+			tx.Rollback()
 			c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 					StatusCode: 1,
 					StatusMsg: "服务器异常错误",
@@ -203,7 +216,7 @@ func PublishList(c *gin.Context) {
 			subscribe = true
 		}
 		isFavorite := true
-		result := db.Table("Likes").Where("user_id = ? AND video_id = ?", AuthorId, tempVideo.Id).Select("1").Limit(1)
+		result := tx.Table("Likes").Where("user_id = ? AND video_id = ?", AuthorId, tempVideo.Id).Select("1").Limit(1)
     if result.RowsAffected == 0 {
       isFavorite = false
     }
@@ -230,6 +243,14 @@ func PublishList(c *gin.Context) {
       IsFavorite: isFavorite,
     }
     videos = append(videos, newVideo)
+	}
+	if err := tx.Commit().Error; err != nil {
+			tx.Rollback() // 回滚事务
+			c.JSON(http.StatusOK, Response{
+					StatusCode: 1,
+					StatusMsg: "服务器异常错误",
+			})
+			return
 	}
 	c.JSON(http.StatusOK, VideoListResponse{
 		Response: Response{

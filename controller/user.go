@@ -35,7 +35,7 @@ func Register(c *gin.Context) {
 	}
 	username := c.Query("username")
 	password := c.Query("password")
-  var user DBUser
+	var user DBUser
 	querySql := db.Table("User").Where("username = ?", username).First(&user)
 	if querySql.Error != nil {
 		if querySql.Error == gorm.ErrRecordNotFound {

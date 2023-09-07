@@ -25,9 +25,11 @@ func FavoriteAction(c *gin.Context) {
 		})
 		return
 	}
+	tx := db.Begin()
 	var user DBUser
-	querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
+	querySql := tx.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
 	if querySql.Error != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, Response{
 				StatusCode: 1,
 				StatusMsg: "服务器异常错误",
@@ -35,6 +37,7 @@ func FavoriteAction(c *gin.Context) {
 		return
 	}
 	if querySql.RowsAffected == 0 {
+		tx.Rollback()
 		c.JSON(http.StatusOK, Response{
 				StatusCode: 1,
 				StatusMsg: "用户鉴权出错",
@@ -43,18 +46,19 @@ func FavoriteAction(c *gin.Context) {
 	}
 	video_id := c.Query("video_id")
 	var tempVideo DBVideo
-	result := db.Table("Video").Where("video_id = ?", video_id).First(&tempVideo)
+	result := tx.Table("Video").Where("video_id = ?", video_id).First(&tempVideo)
 	if result.Error != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "服务器异常错误"})
 		return
 	}
 	if result.RowsAffected == 0 {
+		tx.Rollback()
 		c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "视频不存在"})
 		return
 	}
 	actionType := c.Query("action_type")
   if actionType == "1" {
-		tx := db.Begin()
 		if err := tx.Exec("INSERT INTO Likes (user_id, video_id) VALUES (?, ?)", user.Id, video_id).Error; err != nil {
 		    tx.Rollback() // 回滚事务
 				c.JSON(http.StatusOK, Response{StatusCode: 1})
@@ -92,7 +96,6 @@ func FavoriteAction(c *gin.Context) {
 		c.JSON(http.StatusOK, Response{StatusCode: 0})
 		return
   } else {
-		tx := db.Begin()
 		if err := tx.Exec("DELETE FROM Likes WHERE user_id = ? AND video_id = ?", user.Id, video_id).Error; err != nil {
 		    tx.Rollback() // 回滚事务
 				c.JSON(http.StatusOK, Response{StatusCode: 1})
@@ -152,9 +155,11 @@ func FavoriteList(c *gin.Context) {
 		}})
 		return
 	}
+	tx := db.Begin()
 	var me DBUser
-	querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&me)
+	querySql := tx.Table("User").Where("username = ? AND password = ?", username, password).First(&me)
 	if querySql.Error != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 				StatusCode: 1,
 				StatusMsg: "服务器异常错误",
@@ -162,6 +167,7 @@ func FavoriteList(c *gin.Context) {
 		return
 	}
 	if querySql.RowsAffected == 0 {
+		tx.Rollback()
 		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 				StatusCode: 1,
 				StatusMsg: "用户鉴权出错",
@@ -171,6 +177,7 @@ func FavoriteList(c *gin.Context) {
 	user_id := c.Query("user_id")
 	id, err = strconv.ParseInt(user_id, 10, 64)
 	if err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 				StatusCode: 1, 
 				StatusMsg: "非法用户标识符",
@@ -178,8 +185,9 @@ func FavoriteList(c *gin.Context) {
 		return
 	}
 	var likes []Likes
-	err = db.Table("Likes").Where("user_id = ?", id).Find(&likes).Error
+	err = tx.Table("Likes").Where("user_id = ?", id).Find(&likes).Error
 	if err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 				StatusCode: 1,
 				StatusMsg: "服务器异常错误",
@@ -190,20 +198,23 @@ func FavoriteList(c *gin.Context) {
 	for _, like := range likes {
 		video_id := like.VideoId
 		var tempVideo DBVideo
-		result := db.Table("Video").Where("video_id = ?", video_id).First(&tempVideo)
+		result := tx.Table("Video").Where("video_id = ?", video_id).First(&tempVideo)
 		if result.Error != nil {
+			tx.Rollback()
 			c.JSON(http.StatusOK, VideoListResponse { Response: Response{StatusCode: 1, StatusMsg: "服务器异常错误"}})
 			return
 		}
 		if result.RowsAffected == 0 {
+			tx.Rollback()
 			c.JSON(http.StatusOK, VideoListResponse { Response: Response{StatusCode: 1, StatusMsg: "视频不存在"}})
 			return
 		}
 		AuthorId := tempVideo.AuthorId
 		var user DBUser
-	  db.Table("User").Where("user_id = ?", AuthorId).First(&user)
-		queryIsFollow := db.Table("Follow").Where("from_user_id = ? AND to_user_id = ?", user.Id, id)
+	  tx.Table("User").Where("user_id = ?", AuthorId).First(&user)
+		queryIsFollow := tx.Table("Follow").Where("from_user_id = ? AND to_user_id = ?", user.Id, id)
 		if queryIsFollow.Error != nil {
+			tx.Rollback()
 			c.JSON(http.StatusOK, VideoListResponse { Response: Response{
 					StatusCode: 1,
 					StatusMsg: "服务器异常错误",
@@ -215,7 +226,7 @@ func FavoriteList(c *gin.Context) {
 			subscribe = true
 		}
 		isFavorite := true
-		result = db.Table("Likes").Where("user_id = ? AND video_id = ?", AuthorId, tempVideo.Id).Select("1").Limit(1)
+		result = tx.Table("Likes").Where("user_id = ? AND video_id = ?", AuthorId, tempVideo.Id).Select("1").Limit(1)
     if result.RowsAffected == 0 {
       isFavorite = false
     }
@@ -242,6 +253,14 @@ func FavoriteList(c *gin.Context) {
       IsFavorite: isFavorite,
     }
     videos = append(videos, newVideo)
+	}
+	if err := tx.Commit().Error; err != nil {
+		tx.Rollback() // 回滚事务
+		c.JSON(http.StatusOK, Response{
+				StatusCode: 1,
+				StatusMsg: "服务器异常错误",
+		})
+		return
 	}
 	c.JSON(http.StatusOK, VideoListResponse{
 		Response: Response{

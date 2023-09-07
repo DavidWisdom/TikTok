@@ -37,8 +37,10 @@ func CommentAction(c *gin.Context) {
 		return
 	}
 	var user DBUser
-	querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
+	tx := db.Begin()
+	querySql := tx.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
 	if querySql.Error != nil {
+		tx.Rollback() // 回滚事务
 		c.JSON(http.StatusOK, CommentActionResponse { Response: Response{
 				StatusCode: 1,
 				StatusMsg: "服务器异常错误",
@@ -46,6 +48,7 @@ func CommentAction(c *gin.Context) {
 		return
 	}
 	if querySql.RowsAffected == 0 {
+		tx.Rollback() // 回滚事务
 		c.JSON(http.StatusOK, CommentActionResponse { Response: Response{
 				StatusCode: 1,
 				StatusMsg: "用户鉴权出错",
@@ -54,14 +57,16 @@ func CommentAction(c *gin.Context) {
 	}
 	video_id := c.Query("video_id")
   var tempVideo []DBVideo
-	result := db.Table("Video").Where("video_id = ?", video_id).First(&tempVideo)
+	result := tx.Table("Video").Where("video_id = ?", video_id).First(&tempVideo)
 	if result.Error != nil {
+		tx.Rollback() // 回滚事务
 		c.JSON(http.StatusOK, CommentActionResponse{
 			Response: Response{StatusCode: 1, StatusMsg: "服务器异常错误"},
 		})
 		return
 	}
 	if result.RowsAffected == 0 {
+		tx.Rollback() // 回滚事务
 		c.JSON(http.StatusOK, CommentActionResponse{
 			Response: Response{StatusCode: 1, StatusMsg: "视频不存在"},
 		})
@@ -74,7 +79,6 @@ func CommentAction(c *gin.Context) {
     month := timeObj.Month()
     day := timeObj.Day()
     date := fmt.Sprintf("%02d-%02d", month, day)
-	  tx := db.Begin()
 		// 执行插入评论的 SQL 语句
 		if err := tx.Exec("INSERT INTO Comment (user_id, video_id, content) VALUES (?, ?, ?)",
 		    user.Id, video_id, comment_text).Error; err != nil {
@@ -99,6 +103,7 @@ func CommentAction(c *gin.Context) {
 		}
 		// 提交事务
 		if err := tx.Commit().Error; err != nil {
+				tx.Rollback() // 回滚事务
 				c.JSON(http.StatusOK, CommentActionResponse{Response: Response{StatusCode: 1},})
 				return
 		}
@@ -128,15 +133,17 @@ func CommentAction(c *gin.Context) {
 	 		DELETE FROM Comment
 		  WHERE comment_id = ?
 	 `
-	tx := db.Begin()
-	result = tx.Table("Comment").Where("comment_id = ?", comment_id).Select(1).Limit(1)
+	var comment []DBComment
+	result = tx.Table("Comment").Where("comment_id = ?", comment_id).First(&comment)
 	if result.Error != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, CommentActionResponse{
 			Response: Response{StatusCode: 1, StatusMsg: "服务器异常错误"},
 		})
 		return
 	}
 	if result.RowsAffected == 0 {
+		tx.Rollback()
 		c.JSON(http.StatusOK, CommentActionResponse{
 			Response: Response{StatusCode: 1, StatusMsg: "评论不存在"},
 		})
@@ -157,9 +164,11 @@ func CommentAction(c *gin.Context) {
 			return
 	}
 	if err := tx.Commit().Error; err != nil {
+			tx.Rollback() // 回滚事务
 			c.JSON(http.StatusOK, CommentActionResponse{Response: Response{StatusCode: 1},})
 			return
 	}
+	c.JSON(http.StatusOK, CommentActionResponse{Response: Response{StatusCode: 0},})
 }
 
 // CommentList all videos have same demo comment list
@@ -173,9 +182,11 @@ func CommentList(c *gin.Context) {
 		return
 	}	
 	video_id := c.Query("video_id")
+	tx := db.Begin()
 	var tempComments []DBComment
-	err = db.Table("Comment").Where("video_id = ?", video_id).Order("created_time DESC").Find(&tempComments).Error
+	err = tx.Table("Comment").Where("video_id = ?", video_id).Order("created_time DESC").Find(&tempComments).Error
 	if err != nil {
+		tx.Rollback() // 回滚事务
 		c.JSON(http.StatusInternalServerError, CommentListResponse { Response: Response{
 				StatusCode: 1,
 				StatusMsg: "查询评论信息错误",
@@ -195,8 +206,9 @@ func CommentList(c *gin.Context) {
 			return
 		}
 		var user DBUser
-		querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
+		querySql := tx.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
 		if querySql.Error != nil {
+			tx.Rollback() // 回滚事务
 			c.JSON(http.StatusOK, FeedResponse { Response: Response{
 					StatusCode: 1,
 					StatusMsg: "服务器异常错误",
@@ -204,6 +216,7 @@ func CommentList(c *gin.Context) {
 			return
 		}
 		if querySql.RowsAffected == 0 {
+			tx.Rollback() // 回滚事务
 			c.JSON(http.StatusOK, FeedResponse { Response: Response{
 					StatusCode: 1,
 					StatusMsg: "用户鉴权出错",
@@ -217,10 +230,11 @@ func CommentList(c *gin.Context) {
     // Author
     AuthorId := tempComment.UserId
     var user DBUser
-	  db.Table("User").Where("user_id = ?", AuthorId).First(&user)
-		queryIsFollow := db.Table("Follow").Where("follower_id = ? AND followee_id = ?", user.Id, id)
+	  tx.Table("User").Where("user_id = ?", AuthorId).First(&user)
+		queryIsFollow := tx.Table("Follow").Where("follower_id = ? AND followee_id = ?", user.Id, id)
 		if queryIsFollow.Error != nil {
-			c.JSON(http.StatusOK, UserResponse{
+			tx.Rollback() // 回滚事务
+			c.JSON(http.StatusOK, CommentListResponse{
 				Response: Response{
 					StatusCode: 1,
 					StatusMsg: "服务器异常错误",
@@ -253,6 +267,16 @@ func CommentList(c *gin.Context) {
 		}
 		comments = append(comments, newComment)
   }
+	if err := tx.Commit().Error; err != nil {
+		tx.Rollback() // 回滚事务
+		c.JSON(http.StatusOK, CommentListResponse{
+			Response: Response{
+				StatusCode: 1,
+				StatusMsg: "服务器异常错误",
+			},
+		})
+		return
+	}
 	response := CommentListResponse{
 			Response: Response{StatusCode: 0},
 			CommentList: comments,

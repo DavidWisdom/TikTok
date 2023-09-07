@@ -44,7 +44,7 @@ type User struct {
     FollowerCount int64  `json:"follower_count,omitempty"`
     IsFollow      bool   `json:"is_follow,omitempty"`
     Avatar        string `json:"avatar,omitempty"`
-    BackGroundImage string `json:"back_ground_image,omitempty"`
+    BackGroundImage string `json:"background_image,omitempty"`
     Signature     string `json:"signature,omitempty"`
     TotalFavorited int64  `json:"total_favorited,omitempty"`
     WorkCount     int64  `json:"work_count,omitempty"`
@@ -79,7 +79,7 @@ type Message struct {
 	UserId     int64     `json:"from_user_id,omitempty"`
 	ToUserId   int64     `json:"to_user_id,omitempty"`
 	Content    string    `json:"content,omitempty"`
-	CreateTime string 	 `json:"create_time,omitempty"`
+	CreateTime int64 	 `json:"create_time,omitempty"`
 }
 
 type DBMessage struct {

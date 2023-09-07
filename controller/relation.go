@@ -181,7 +181,6 @@ func RelationAction(c *gin.Context) {
 	})
 }
 
-// FollowList all users have same follow list
 func FollowerList(c *gin.Context) {
 	db, err := Connect()
 	if err != nil {
@@ -279,7 +278,6 @@ func FollowerList(c *gin.Context) {
 	})
 }
 
-// FollowerList all users have same follower list
 func FollowList(c *gin.Context) {
 	db, err := Connect()
 	if err != nil {
@@ -324,8 +322,6 @@ func FollowList(c *gin.Context) {
 		}})
 		return
 	}
-
-
 	var follows []Follow
 	if err := db.Table("Follow").Where("from_user_id = ?", id).Find(&follows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, UserListResponse{

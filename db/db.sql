@@ -57,7 +57,6 @@ CREATE TABLE Message (
     to_user_id INT,
     content VARCHAR(256) NOT NULL,
     created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    pre_msg_time INT DEFAULT 0,
     FOREIGN KEY (from_user_id) REFERENCES User(user_id) ON DELETE CASCADE,
     FOREIGN KEY (to_user_id) REFERENCES User(user_id) ON DELETE CASCADE
 );

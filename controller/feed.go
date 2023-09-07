@@ -22,12 +22,14 @@ func Feed(c *gin.Context) {
 		}})
 		return
 	}	
+	tx := db.Begin()
 	token := c.PostForm("token")
 	var id int64
 	id = -1
 	if len(token) != 0 {
 		username, password, err := GetInfo(token)
 		if err != nil {
+			tx.Rollback()
 			c.JSON(http.StatusOK, FeedResponse { Response: Response{
 					StatusCode: 1, 
 					StatusMsg: "用户鉴权出错",
@@ -37,6 +39,7 @@ func Feed(c *gin.Context) {
 		var user DBUser
 		querySql := db.Table("User").Where("username = ? AND password = ?", username, password).First(&user)
 		if querySql.Error != nil {
+			tx.Rollback()
 			c.JSON(http.StatusOK, FeedResponse { Response: Response{
 					StatusCode: 1,
 					StatusMsg: "服务器异常错误",
@@ -44,6 +47,7 @@ func Feed(c *gin.Context) {
 			return
 		}
 		if querySql.RowsAffected == 0 {
+			tx.Rollback()
 			c.JSON(http.StatusOK, FeedResponse { Response: Response{
 					StatusCode: 1,
 					StatusMsg: "用户鉴权出错",
@@ -53,23 +57,18 @@ func Feed(c *gin.Context) {
 		user_id := c.Query("user_id")
 		id, err = strconv.ParseInt(user_id, 10, 64)	
 		if err != nil {
+			tx.Rollback()
 			c.JSON(http.StatusOK, FeedResponse { Response: Response{
 					StatusCode: 1, 
 					StatusMsg: "非法用户标识符",
 			}})
 			return
 		}
-		if id != user.Id {
-			c.JSON(http.StatusOK, FeedResponse { Response: Response{
-					StatusCode: 1,
-					StatusMsg: "用户鉴权出错",
-			}})
-			return
-		}
 	}
 	var tempVideos []DBVideo
-	err = db.Table("Video").Order("created_time DESC").Limit(30).Find(&tempVideos).Error
+	err = tx.Table("Video").Order("created_time DESC").Limit(30).Find(&tempVideos).Error
 	if err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusOK, FeedResponse { 
 			Response: Response{
 			StatusCode: 1,
@@ -81,8 +80,8 @@ func Feed(c *gin.Context) {
 	for _, tempVideo := range tempVideos {
     AuthorId := tempVideo.AuthorId
 		var user DBUser
-	  db.Table("User").Where("user_id = ?", AuthorId).First(&user)
-		queryIsFollow := db.Table("Follow").Where("follower_id = ? AND followee_id = ?", user.Id, id)
+	  tx.Table("User").Where("user_id = ?", AuthorId).First(&user)
+		queryIsFollow := tx.Table("Follow").Where("follower_id = ? AND followee_id = ?", user.Id, id)
 		if queryIsFollow.Error != nil {
 			c.JSON(http.StatusOK, FeedResponse { 
 				Response: Response{
@@ -96,7 +95,7 @@ func Feed(c *gin.Context) {
 			subscribe = true
 		}
 		isFavorite := true
-		result := db.Table("Likes").Where("user_id = ? AND video_id = ?", AuthorId, tempVideo.Id).Select("1").Limit(1)
+		result := tx.Table("Likes").Where("user_id = ? AND video_id = ?", AuthorId, tempVideo.Id).Select("1").Limit(1)
     if result.RowsAffected == 0 {
       isFavorite = false
     }
@@ -123,6 +122,14 @@ func Feed(c *gin.Context) {
       IsFavorite: isFavorite,
     }
     videos = append(videos, newVideo)
+	}
+	if err := tx.Commit().Error; err != nil {
+			tx.Rollback() // 回滚事务
+			c.JSON(http.StatusOK, Response{
+					StatusCode: 1,
+					StatusMsg: "服务器异常错误",
+			})
+			return
 	}
 	c.JSON(http.StatusOK, FeedResponse{
 		Response: Response{

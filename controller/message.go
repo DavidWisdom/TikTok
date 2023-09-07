@@ -1,13 +1,11 @@
 package controller
 
 import (
-	//"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
 	// "sync/atomic"
-	// "time"
-	//"time"
+	"time"
 )
 
 type ChatResponse struct {
@@ -162,40 +160,48 @@ func MessageChat(c *gin.Context) {
 		return
 	}
 	var tempMessages []DBMessage
-	tx := db.Begin()
-	err = tx.Table("Message").Where("from_user_id = ? AND to_user_id = ?", user.Id, to_user_id).Order("created_time").Find(&tempMessages).Error
+	pre_msg := c.Query("pre_msg_time")
+	pre_msg_time, err := strconv.Atoi(pre_msg)
+	num := int64(pre_msg_time)
+	str := strconv.FormatInt(num, 10)
+	digits := len(str)
+	if digits > 10 {
+		num /= 1000
+	}
 	if err != nil {
-			tx.Rollback() // 回滚事务
-			c.JSON(http.StatusOK, Response{
+		c.JSON(http.StatusOK, Response{
 				StatusCode: 1,
-				StatusMsg: "查询聊天信息失败",
+				StatusMsg: "消息类型错误",
+		})
+		return
+	}
+	if num == 0 {
+		if err := db.Table("Message").Where("(from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)", user.Id, to_user_id, to_user_id, user.Id).Order("created_time").Find(&tempMessages).Error; err != nil {
+			c.JSON(http.StatusOK, Response{
+					StatusCode: 1,
+					StatusMsg: "查询聊天信息失败",
 			})
 			return
+		}
+	} else {
+		t := time.Unix(num, 0)
+		if err := db.Table("Message").Where("(from_user_id = ? AND to_user_id = ? AND created_time > ?) OR (from_user_id = ? AND to_user_id = ? AND created_time > ?)", user.Id, to_user_id, t, to_user_id, user.Id, t).Order("created_time").Find(&tempMessages).Error; err != nil {
+			c.JSON(http.StatusOK, Response{
+					StatusCode: 1,
+					StatusMsg: "查询聊天信息失败",
+			})
+			return
+		}
 	}
-	// sql := "UPDATE Message SET pre_msg_time = TRUE WHERE from_user_id = ? AND to_user_id = ?"
-	// if err := tx.Exec(sql, user.Id, to_user_id).Error; err != nil {
-	// 		tx.Rollback() // 回滚事务
-	// 		c.JSON(http.StatusOK, Response{
-	// 			StatusCode: 1,
-	// 			StatusMsg: "查询聊天信息失败",
-	// 		})
-	// 		return
-	// }
-	// if err := tx.Commit().Error; err != nil {
-	// 		c.JSON(http.StatusOK, Response{
-	// 			StatusCode: 1,
-	// 			StatusMsg: "查询聊天信息失败",
-	// 		})
-	// 		return
-	// }
 	var messages []Message
+
 	for _, message := range tempMessages {
 		newMessage := Message {
 			Id: message.Id,
 			UserId: message.UserId,
 			ToUserId: message.ToUserId,
 			Content: message.Content,
-			// CreateTime: message.CreatedTime.Format(time.Kitchen),
+			CreateTime: message.CreatedTime.Unix(),
 		}
 		messages = append(messages, newMessage)
 	}
